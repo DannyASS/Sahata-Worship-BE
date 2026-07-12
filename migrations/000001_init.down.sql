@@ -1,0 +1,8 @@
+DROP TABLE IF EXISTS user_settings;
+DROP TABLE IF EXISTS activity_logs;
+DROP TABLE IF EXISTS cues;
+DROP TABLE IF EXISTS team_members;
+DROP TABLE IF EXISTS room_channels;
+DROP TABLE IF EXISTS channels;
+DROP TABLE IF EXISTS rooms;
+DROP TABLE IF EXISTS users;

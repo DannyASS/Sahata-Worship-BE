@@ -1,0 +1,45 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+!.env.docker.example
+
+# Go build output
+bin/
+build/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Coverage and profiling
+coverage/
+coverage.out
+*.coverprofile
+*.prof
+
+# Logs and runtime files
+*.log
+*.pid
+
+# Go workspace and local tooling
+go.work
+go.work.sum
+.air.toml
+tmp/
+temp/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Operating system files
+.DS_Store
+Thumbs.db
+Desktop.ini
