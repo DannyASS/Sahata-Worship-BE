@@ -13,17 +13,21 @@ type User struct {
 	CreatedAt    time.Time `json:"createdAt"`
 }
 type Room struct {
-	ID        int64     `json:"id"`
-	Name      string    `json:"name"`
-	Date      string    `json:"date"`
-	StartTime string    `json:"startTime"`
-	EndTime   string    `json:"endTime"`
-	Code      string    `json:"code"`
-	Status    string    `json:"status"`
-	Members   int       `json:"members"`
-	Channels  []string  `json:"channels"`
-	CreatedBy int64     `json:"createdBy,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID                   int64     `json:"id"`
+	Name                 string    `json:"name"`
+	Date                 string    `json:"date"`
+	StartTime            string    `json:"startTime"`
+	EndTime              string    `json:"endTime"`
+	Code                 string    `json:"code"`
+	Status               string    `json:"status"`
+	CurrentSongID        *int64    `json:"currentSongId,omitempty"`
+	CurrentSongSectionID *int64    `json:"currentSongSectionId,omitempty"`
+	CurrentSong          *Song     `json:"currentSong,omitempty"`
+	Songs                []Song    `json:"songs"`
+	Members              int       `json:"members"`
+	Channels             []string  `json:"channels"`
+	CreatedBy            int64     `json:"createdBy,omitempty"`
+	CreatedAt            time.Time `json:"createdAt"`
 }
 type Member struct {
 	ID         int64     `json:"id"`
@@ -45,17 +49,39 @@ type Cue struct {
 	Channel   string  `json:"channel"`
 	Icon      *string `json:"icon,omitempty"`
 	Vibration *string `json:"vibration,omitempty"`
+	Active    bool    `json:"active"`
 	SortOrder int     `json:"sortOrder"`
 }
+type SongSection struct {
+	ID           int64  `json:"id"`
+	SongID       int64  `json:"songId"`
+	SectionLabel string `json:"sectionLabel"`
+	Lyrics       string `json:"lyrics"`
+	DisplayOrder int    `json:"displayOrder"`
+}
+type Song struct {
+	ID          int64         `json:"id"`
+	Title       string        `json:"title"`
+	Artist      string        `json:"artist"`
+	DefaultKey  string        `json:"defaultKey"`
+	SelectedKey string        `json:"selectedKey,omitempty"`
+	BPM         int           `json:"bpm"`
+	CreatedBy   int64         `json:"createdBy,omitempty"`
+	Sections    []SongSection `json:"sections"`
+}
 type Activity struct {
-	ID         int64     `json:"id"`
-	RoomID     int64     `json:"roomId"`
-	Sender     string    `json:"sender"`
-	SenderRole string    `json:"senderRole,omitempty"`
-	Message    string    `json:"message"`
-	Target     string    `json:"target"`
-	Received   bool      `json:"received"`
-	CreatedAt  time.Time `json:"createdAt"`
+	ID            int64        `json:"id"`
+	RoomID        int64        `json:"roomId"`
+	Sender        string       `json:"sender"`
+	SenderRole    string       `json:"senderRole,omitempty"`
+	Message       string       `json:"message"`
+	Target        string       `json:"target"`
+	Received      bool         `json:"received"`
+	SongID        *int64       `json:"songId,omitempty"`
+	SongSectionID *int64       `json:"songSectionId,omitempty"`
+	Song          *Song        `json:"song,omitempty"`
+	SongSection   *SongSection `json:"songSection,omitempty"`
+	CreatedAt     time.Time    `json:"createdAt"`
 }
 type Settings struct {
 	UserID         int64  `json:"userId"`
@@ -90,6 +116,12 @@ type Store interface {
 	CreateCue(Cue) (Cue, error)
 	UpdateCue(Cue) (Cue, error)
 	DeleteCue(int64) error
+	ListSongs(string) ([]Song, error)
+	SongByID(int64) (Song, error)
+	CreateSong(Song) (Song, error)
+	UpdateSong(Song) (Song, error)
+	DeleteSong(int64) error
+	SetRoomSongState(int64, *int64, *int64) (Room, error)
 	ListActivities(int64) ([]Activity, error)
 	CreateActivity(Activity) (Activity, error)
 	GetSettings(int64) (Settings, error)

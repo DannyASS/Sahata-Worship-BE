@@ -50,7 +50,7 @@ func (r *MySQL) UpdateUserAccess(id int64, role, status string) (domain.User, er
 	return r.UserByID(id)
 }
 func (r *MySQL) ListRooms() ([]domain.Room, error) {
-	rows, e := r.db.Query(`SELECT r.id,r.name,DATE_FORMAT(r.service_date,'%Y-%m-%d'),TIME_FORMAT(r.start_time,'%H:%i'),TIME_FORMAT(r.end_time,'%H:%i'),r.code,r.status,COUNT(DISTINCT tm.id),r.created_by,r.created_at,GROUP_CONCAT(DISTINCT c.name ORDER BY c.name) FROM rooms r LEFT JOIN team_members tm ON tm.room_id=r.id LEFT JOIN room_channels rc ON rc.room_id=r.id LEFT JOIN channels c ON c.id=rc.channel_id GROUP BY r.id ORDER BY r.service_date DESC,r.start_time`)
+	rows, e := r.db.Query(`SELECT r.id,r.name,DATE_FORMAT(r.service_date,'%Y-%m-%d'),TIME_FORMAT(r.start_time,'%H:%i'),TIME_FORMAT(r.end_time,'%H:%i'),r.code,r.status,r.current_song_id,r.current_song_section_id,COUNT(DISTINCT tm.id),r.created_by,r.created_at,GROUP_CONCAT(DISTINCT c.name ORDER BY c.name) FROM rooms r LEFT JOIN team_members tm ON tm.room_id=r.id LEFT JOIN room_channels rc ON rc.room_id=r.id LEFT JOIN channels c ON c.id=rc.channel_id GROUP BY r.id ORDER BY r.service_date DESC,r.start_time`)
 	if e != nil {
 		return nil, e
 	}
@@ -59,11 +59,23 @@ func (r *MySQL) ListRooms() ([]domain.Room, error) {
 	for rows.Next() {
 		var x domain.Room
 		var cs sql.NullString
-		if e = rows.Scan(&x.ID, &x.Name, &x.Date, &x.StartTime, &x.EndTime, &x.Code, &x.Status, &x.Members, &x.CreatedBy, &x.CreatedAt, &cs); e != nil {
+		if e = rows.Scan(&x.ID, &x.Name, &x.Date, &x.StartTime, &x.EndTime, &x.Code, &x.Status, &x.CurrentSongID, &x.CurrentSongSectionID, &x.Members, &x.CreatedBy, &x.CreatedAt, &cs); e != nil {
 			return nil, e
 		}
 		if cs.Valid {
 			x.Channels = strings.Split(cs.String, ",")
+		}
+		x.Songs, e = r.roomSongs(x.ID)
+		if e != nil {
+			return nil, e
+		}
+		if x.CurrentSongID != nil {
+			for i := range x.Songs {
+				if x.Songs[i].ID == *x.CurrentSongID {
+					x.CurrentSong = &x.Songs[i]
+					break
+				}
+			}
 		}
 		out = append(out, x)
 	}
@@ -95,7 +107,13 @@ func (r *MySQL) CreateRoom(x domain.Room) (domain.Room, error) {
 	if e = saveChannels(tx, x.ID, x.Channels); e != nil {
 		return x, e
 	}
-	return x, tx.Commit()
+	if e = saveRoomSongs(tx, x.ID, x.Songs); e != nil {
+		return x, e
+	}
+	if e = tx.Commit(); e != nil {
+		return x, e
+	}
+	return r.RoomByID(x.ID)
 }
 func (r *MySQL) UpdateRoom(x domain.Room) (domain.Room, error) {
 	tx, e := r.db.Begin()
@@ -111,10 +129,22 @@ func (r *MySQL) UpdateRoom(x domain.Room) (domain.Room, error) {
 	if e == nil {
 		e = saveChannels(tx, x.ID, x.Channels)
 	}
+	if e == nil {
+		_, e = tx.Exec(`DELETE FROM room_songs WHERE room_id=?`, x.ID)
+	}
+	if e == nil {
+		e = saveRoomSongs(tx, x.ID, x.Songs)
+	}
+	if e == nil {
+		_, e = tx.Exec(`UPDATE rooms SET current_song_id=NULL,current_song_section_id=NULL WHERE id=? AND current_song_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM room_songs WHERE room_id=? AND song_id=rooms.current_song_id)`, x.ID, x.ID)
+	}
 	if e != nil {
 		return x, e
 	}
-	return x, tx.Commit()
+	if e = tx.Commit(); e != nil {
+		return x, e
+	}
+	return r.RoomByID(x.ID)
 }
 func saveChannels(tx *sql.Tx, id int64, names []string) error {
 	for _, n := range names {
@@ -128,6 +158,38 @@ func saveChannels(tx *sql.Tx, id int64, names []string) error {
 		}
 	}
 	return nil
+}
+func saveRoomSongs(tx *sql.Tx, roomID int64, songs []domain.Song) error {
+	for i, song := range songs {
+		selectedKey := strings.TrimSpace(song.SelectedKey)
+		if selectedKey == "" {
+			selectedKey = song.DefaultKey
+		}
+		if _, e := tx.Exec(`INSERT INTO room_songs(room_id,song_id,selected_key,display_order) VALUES(?,?,?,?)`, roomID, song.ID, selectedKey, i+1); e != nil {
+			return e
+		}
+	}
+	return nil
+}
+func (r *MySQL) roomSongs(roomID int64) ([]domain.Song, error) {
+	rows, e := r.db.Query(`SELECT s.id,s.title,s.artist,s.default_key,rs.selected_key,s.bpm,s.created_by FROM room_songs rs JOIN songs s ON s.id=rs.song_id WHERE rs.room_id=? ORDER BY rs.display_order,s.title`, roomID)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := make([]domain.Song, 0)
+	for rows.Next() {
+		var x domain.Song
+		if e = rows.Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.SelectedKey, &x.BPM, &x.CreatedBy); e != nil {
+			return nil, e
+		}
+		x.Sections, e = r.songSections(x.ID)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
 }
 func (r *MySQL) DeleteRoom(id int64) error {
 	res, e := r.db.Exec(`DELETE FROM rooms WHERE id=?`, id)
@@ -197,7 +259,7 @@ func (r *MySQL) DeleteUserMember(roomID, userID int64) (domain.Member, error) {
 	return x, e
 }
 func (r *MySQL) ListCues() ([]domain.Cue, error) {
-	rows, e := r.db.Query(`SELECT id,label,category,priority,channel,icon,vibration,sort_order FROM cues ORDER BY sort_order,id`)
+	rows, e := r.db.Query(`SELECT id,label,category,priority,channel,icon,vibration,is_active,sort_order FROM cues ORDER BY sort_order,id`)
 	if e != nil {
 		return nil, e
 	}
@@ -205,7 +267,7 @@ func (r *MySQL) ListCues() ([]domain.Cue, error) {
 	var out []domain.Cue
 	for rows.Next() {
 		var x domain.Cue
-		if e = rows.Scan(&x.ID, &x.Label, &x.Category, &x.Priority, &x.Channel, &x.Icon, &x.Vibration, &x.SortOrder); e != nil {
+		if e = rows.Scan(&x.ID, &x.Label, &x.Category, &x.Priority, &x.Channel, &x.Icon, &x.Vibration, &x.Active, &x.SortOrder); e != nil {
 			return nil, e
 		}
 		out = append(out, x)
@@ -213,22 +275,162 @@ func (r *MySQL) ListCues() ([]domain.Cue, error) {
 	return out, rows.Err()
 }
 func (r *MySQL) CreateCue(x domain.Cue) (domain.Cue, error) {
-	res, e := r.db.Exec(`INSERT INTO cues(label,category,priority,channel,icon,vibration,sort_order) VALUES(?,?,?,?,?,?,?)`, x.Label, x.Category, x.Priority, x.Channel, x.Icon, x.Vibration, x.SortOrder)
+	res, e := r.db.Exec(`INSERT INTO cues(label,category,priority,channel,icon,vibration,is_active,sort_order) VALUES(?,?,?,?,?,?,?,?)`, x.Label, x.Category, x.Priority, x.Channel, x.Icon, x.Vibration, x.Active, x.SortOrder)
 	if e == nil {
 		x.ID, _ = res.LastInsertId()
 	}
 	return x, e
 }
 func (r *MySQL) UpdateCue(x domain.Cue) (domain.Cue, error) {
-	res, e := r.db.Exec(`UPDATE cues SET label=?,category=?,priority=?,channel=?,icon=?,vibration=?,sort_order=? WHERE id=?`, x.Label, x.Category, x.Priority, x.Channel, x.Icon, x.Vibration, x.SortOrder, x.ID)
+	res, e := r.db.Exec(`UPDATE cues SET label=?,category=?,priority=?,channel=?,icon=?,vibration=?,is_active=?,sort_order=? WHERE id=?`, x.Label, x.Category, x.Priority, x.Channel, x.Icon, x.Vibration, x.Active, x.SortOrder, x.ID)
 	return x, affected(res, e)
 }
 func (r *MySQL) DeleteCue(id int64) error {
 	res, e := r.db.Exec(`DELETE FROM cues WHERE id=?`, id)
 	return affected(res, e)
 }
+func (r *MySQL) ListSongs(search string) ([]domain.Song, error) {
+	q := `SELECT id,title,artist,default_key,bpm,created_by FROM songs`
+	args := []any{}
+	if strings.TrimSpace(search) != "" {
+		q += ` WHERE title LIKE ? OR artist LIKE ?`
+		term := "%" + strings.TrimSpace(search) + "%"
+		args = append(args, term, term)
+	}
+	q += ` ORDER BY title,artist`
+	rows, e := r.db.Query(q, args...)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := make([]domain.Song, 0)
+	for rows.Next() {
+		var x domain.Song
+		if e = rows.Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.BPM, &x.CreatedBy); e != nil {
+			return nil, e
+		}
+		x.Sections, e = r.songSections(x.ID)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+func (r *MySQL) SongByID(id int64) (x domain.Song, e error) {
+	e = r.db.QueryRow(`SELECT id,title,artist,default_key,bpm,created_by FROM songs WHERE id=?`, id).Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.BPM, &x.CreatedBy)
+	if e != nil {
+		return
+	}
+	x.Sections, e = r.songSections(id)
+	return
+}
+func (r *MySQL) songSections(songID int64) ([]domain.SongSection, error) {
+	rows, e := r.db.Query(`SELECT id,song_id,section_label,lyrics,display_order FROM song_sections WHERE song_id=? ORDER BY display_order,id`, songID)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	var out []domain.SongSection
+	for rows.Next() {
+		var x domain.SongSection
+		if e = rows.Scan(&x.ID, &x.SongID, &x.SectionLabel, &x.Lyrics, &x.DisplayOrder); e != nil {
+			return nil, e
+		}
+		out = append(out, x)
+	}
+	return out, rows.Err()
+}
+func (r *MySQL) CreateSong(x domain.Song) (domain.Song, error) { return r.saveSong(x, false) }
+func (r *MySQL) UpdateSong(x domain.Song) (domain.Song, error) { return r.saveSong(x, true) }
+func (r *MySQL) saveSong(x domain.Song, update bool) (domain.Song, error) {
+	tx, e := r.db.Begin()
+	if e != nil {
+		return x, e
+	}
+	defer tx.Rollback()
+	if update {
+		_, err := tx.Exec(`UPDATE songs SET title=?,artist=?,default_key=?,bpm=? WHERE id=?`, x.Title, x.Artist, x.DefaultKey, x.BPM, x.ID)
+		if err != nil {
+			return x, err
+		}
+	} else {
+		res, err := tx.Exec(`INSERT INTO songs(title,artist,default_key,bpm,created_by) VALUES(?,?,?,?,?)`, x.Title, x.Artist, x.DefaultKey, x.BPM, x.CreatedBy)
+		if err != nil {
+			return x, err
+		}
+		x.ID, _ = res.LastInsertId()
+	}
+	retained := make([]int64, 0, len(x.Sections))
+	for i := range x.Sections {
+		s := &x.Sections[i]
+		s.SongID = x.ID
+		if s.DisplayOrder < 1 {
+			s.DisplayOrder = i + 1
+		}
+		if update && s.ID > 0 {
+			if _, err := tx.Exec(`UPDATE song_sections SET section_label=?,lyrics=?,display_order=? WHERE id=? AND song_id=?`, s.SectionLabel, s.Lyrics, s.DisplayOrder, s.ID, x.ID); err != nil {
+				return x, err
+			}
+			retained = append(retained, s.ID)
+		} else {
+			res, err := tx.Exec(`INSERT INTO song_sections(song_id,section_label,lyrics,display_order) VALUES(?,?,?,?)`, x.ID, s.SectionLabel, s.Lyrics, s.DisplayOrder)
+			if err != nil {
+				return x, err
+			}
+			s.ID, _ = res.LastInsertId()
+			retained = append(retained, s.ID)
+		}
+	}
+	if update {
+		query := `DELETE FROM song_sections WHERE song_id=?`
+		args := []any{x.ID}
+		if len(retained) > 0 {
+			query += ` AND id NOT IN (` + strings.TrimRight(strings.Repeat("?,", len(retained)), ",") + `)`
+			for _, sectionID := range retained {
+				args = append(args, sectionID)
+			}
+		}
+		if _, e = tx.Exec(query, args...); e != nil {
+			return x, e
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		return x, e
+	}
+	return r.SongByID(x.ID)
+}
+func (r *MySQL) DeleteSong(id int64) error {
+	res, e := r.db.Exec(`DELETE FROM songs WHERE id=?`, id)
+	return affected(res, e)
+}
+func (r *MySQL) SetRoomSongState(roomID int64, songID, sectionID *int64) (domain.Room, error) {
+	if songID != nil {
+		var found int
+		if e := r.db.QueryRow(`SELECT COUNT(*) FROM room_songs WHERE room_id=? AND song_id=?`, roomID, *songID).Scan(&found); e != nil {
+			return domain.Room{}, e
+		}
+		if found == 0 {
+			return domain.Room{}, errors.New("lagu tidak ada di setlist room")
+		}
+	}
+	if sectionID != nil {
+		var sectionSong int64
+		if e := r.db.QueryRow(`SELECT song_id FROM song_sections WHERE id=?`, *sectionID).Scan(&sectionSong); e != nil {
+			return domain.Room{}, e
+		}
+		if songID == nil || sectionSong != *songID {
+			return domain.Room{}, errors.New("song section tidak sesuai dengan lagu")
+		}
+	}
+	res, e := r.db.Exec(`UPDATE rooms SET current_song_id=?,current_song_section_id=? WHERE id=?`, songID, sectionID, roomID)
+	if e = affected(res, e); e != nil {
+		return domain.Room{}, e
+	}
+	return r.RoomByID(roomID)
+}
 func (r *MySQL) ListActivities(room int64) ([]domain.Activity, error) {
-	rows, e := r.db.Query(`SELECT id,room_id,sender,message,target,received,created_at FROM activity_logs WHERE room_id=? ORDER BY created_at DESC LIMIT 100`, room)
+	rows, e := r.db.Query(`SELECT id,room_id,sender,message,target,received,song_id,song_section_id,created_at FROM activity_logs WHERE room_id=? ORDER BY created_at DESC LIMIT 100`, room)
 	if e != nil {
 		return nil, e
 	}
@@ -236,7 +438,7 @@ func (r *MySQL) ListActivities(room int64) ([]domain.Activity, error) {
 	var out []domain.Activity
 	for rows.Next() {
 		var x domain.Activity
-		if e = rows.Scan(&x.ID, &x.RoomID, &x.Sender, &x.Message, &x.Target, &x.Received, &x.CreatedAt); e != nil {
+		if e = rows.Scan(&x.ID, &x.RoomID, &x.Sender, &x.Message, &x.Target, &x.Received, &x.SongID, &x.SongSectionID, &x.CreatedAt); e != nil {
 			return nil, e
 		}
 		out = append(out, x)
@@ -244,9 +446,22 @@ func (r *MySQL) ListActivities(room int64) ([]domain.Activity, error) {
 	return out, rows.Err()
 }
 func (r *MySQL) CreateActivity(x domain.Activity) (domain.Activity, error) {
-	res, e := r.db.Exec(`INSERT INTO activity_logs(room_id,sender,message,target,received) VALUES(?,?,?,?,?)`, x.RoomID, x.Sender, x.Message, x.Target, x.Received)
+	res, e := r.db.Exec(`INSERT INTO activity_logs(room_id,sender,message,target,received,song_id,song_section_id) VALUES(?,?,?,?,?,?,?)`, x.RoomID, x.Sender, x.Message, x.Target, x.Received, x.SongID, x.SongSectionID)
 	if e == nil {
 		x.ID, _ = res.LastInsertId()
+		if x.SongID != nil {
+			song, err := r.SongByID(*x.SongID)
+			if err != nil {
+				return x, err
+			}
+			x.Song = &song
+			for i := range song.Sections {
+				if x.SongSectionID != nil && song.Sections[i].ID == *x.SongSectionID {
+					x.SongSection = &song.Sections[i]
+					break
+				}
+			}
+		}
 	}
 	return x, e
 }

@@ -180,6 +180,10 @@ func (h *HTTP) roomEvents(w http.ResponseWriter, r *http.Request) {
 		h.mu.Unlock()
 	}()
 	w.Write([]byte(": connected\n\n"))
+	if room, roomErr := h.u.Store().RoomByID(roomID); roomErr == nil {
+		payload, _ := json.Marshal(room)
+		_, _ = w.Write([]byte("event: room-state\ndata: " + string(payload) + "\n\n"))
+	}
 	flusher.Flush()
 	for {
 		select {
@@ -349,6 +353,29 @@ func (h *HTTP) api(w http.ResponseWriter, r *http.Request) {
 	var v any
 	var e error
 	status := 200
+	if parts[0] == "rooms" && len(parts) > 2 && parts[2] == "song-state" {
+		if r.Method != "PUT" {
+			notAllowed(w)
+			return
+		}
+		var x struct {
+			SongID        *int64 `json:"songId"`
+			SongSectionID *int64 `json:"songSectionId"`
+		}
+		if decode(w, r, &x) != nil {
+			return
+		}
+		v, e = s.SetRoomSongState(id, x.SongID, x.SongSectionID)
+		if e == nil {
+			h.broadcast(id, streamEvent{Name: "room-state", Data: v})
+		}
+		if e != nil {
+			fail(w, e)
+			return
+		}
+		write(w, status, map[string]any{"data": v})
+		return
+	}
 	switch parts[0] {
 	case "users":
 		admin, adminErr := s.UserByID(userID(r))
@@ -461,6 +488,44 @@ func (h *HTTP) api(w http.ResponseWriter, r *http.Request) {
 		case "DELETE":
 			e = s.DeleteCue(id)
 			v = map[string]string{"message": "cue deleted"}
+		default:
+			notAllowed(w)
+			return
+		}
+	case "songs":
+		switch r.Method {
+		case "GET":
+			if id > 0 {
+				v, e = s.SongByID(id)
+			} else {
+				v, e = s.ListSongs(r.URL.Query().Get("search"))
+			}
+		case "POST":
+			var x domain.Song
+			if decode(w, r, &x) != nil {
+				return
+			}
+			x.CreatedBy = userID(r)
+			if strings.TrimSpace(x.Title) == "" || strings.TrimSpace(x.Artist) == "" || strings.TrimSpace(x.DefaultKey) == "" || x.BPM < 1 || len(x.Sections) < 1 {
+				fail(w, usecase.ErrInvalid)
+				return
+			}
+			v, e = s.CreateSong(x)
+			status = 201
+		case "PUT":
+			var x domain.Song
+			if decode(w, r, &x) != nil {
+				return
+			}
+			x.ID = id
+			if strings.TrimSpace(x.Title) == "" || strings.TrimSpace(x.Artist) == "" || strings.TrimSpace(x.DefaultKey) == "" || x.BPM < 1 || len(x.Sections) < 1 {
+				fail(w, usecase.ErrInvalid)
+				return
+			}
+			v, e = s.UpdateSong(x)
+		case "DELETE":
+			e = s.DeleteSong(id)
+			v = map[string]string{"message": "song deleted"}
 		default:
 			notAllowed(w)
 			return
@@ -578,7 +643,7 @@ func memberAccessAllowed(resource, method string) bool {
 		return method == "GET" || method == "PUT"
 	}
 	switch resource {
-	case "rooms", "members", "cues", "activities":
+	case "rooms", "members", "cues", "activities", "songs":
 		return method == "GET"
 	}
 	return false
