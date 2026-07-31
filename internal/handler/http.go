@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"sahata-worship-be/internal/domain"
+	livekitauth "sahata-worship-be/internal/livekit"
 	"sahata-worship-be/internal/usecase"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ type HTTP struct {
 	roomStreams map[int64]map[chan streamEvent]struct{}
 	directors   map[int64]map[string]map[string]string
 	speakers    map[int64]string
+	livekit     *livekitauth.Issuer
 }
 
 type streamEvent struct {
@@ -31,8 +33,8 @@ type signalMessage struct {
 	Data     json.RawMessage `json:"data"`
 }
 
-func New(u *usecase.Service, origin string) http.Handler {
-	h := &HTTP{u: u, origin: origin, roomStreams: make(map[int64]map[chan streamEvent]struct{}), directors: make(map[int64]map[string]map[string]string), speakers: make(map[int64]string)}
+func New(u *usecase.Service, origin string, livekitConfig livekitauth.Config) http.Handler {
+	h := &HTTP{u: u, origin: origin, roomStreams: make(map[int64]map[chan streamEvent]struct{}), directors: make(map[int64]map[string]map[string]string), speakers: make(map[int64]string), livekit: livekitauth.NewIssuer(livekitConfig)}
 	m := http.NewServeMux()
 	m.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) { write(w, 200, map[string]string{"status": "ok"}) })
 	m.HandleFunc("POST /api/v1/auth/register", h.register)
@@ -41,14 +43,69 @@ func New(u *usecase.Service, origin string) http.Handler {
 	m.HandleFunc("GET /api/v1/rooms/{id}/events", h.roomEvents)
 	m.HandleFunc("POST /api/v1/rooms/{id}/signals", h.roomSignal)
 	m.HandleFunc("DELETE /api/v1/rooms/{id}/members/{memberId}", h.leaveRoom)
+	m.HandleFunc("POST /api/v1/rooms/{id}/members/{memberId}/livekit-token", h.guestLiveKitToken)
 	m.HandleFunc("GET /api/v1/rooms/{id}/directors", h.listDirectors)
 	m.Handle("POST /api/v1/rooms/{id}/presence", h.auth(http.HandlerFunc(h.userPresence)))
 	m.Handle("DELETE /api/v1/rooms/{id}/presence", h.auth(http.HandlerFunc(h.userPresence)))
 	m.Handle("POST /api/v1/rooms/{id}/director-presence", h.auth(http.HandlerFunc(h.directorPresence)))
 	m.Handle("DELETE /api/v1/rooms/{id}/director-presence", h.auth(http.HandlerFunc(h.directorPresence)))
 	m.Handle("POST /api/v1/rooms/{id}/speaker-lock", h.auth(http.HandlerFunc(h.speakerLock)))
+	m.Handle("POST /api/v1/rooms/{id}/livekit-token", h.auth(http.HandlerFunc(h.userLiveKitToken)))
 	m.Handle("/api/v1/", h.auth(http.HandlerFunc(h.api)))
 	return h.cors(m)
+}
+
+func (h *HTTP) userLiveKitToken(w http.ResponseWriter, r *http.Request) {
+	roomID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || roomID < 1 {
+		fail(w, usecase.ErrInvalid)
+		return
+	}
+	if _, err = h.u.Store().RoomByID(roomID); err != nil {
+		fail(w, err)
+		return
+	}
+	user, err := h.u.Store().UserByID(userID(r))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	canPublish := user.Role == "Music Director" || user.Role == "Admin Gereja"
+	h.writeLiveKitToken(w, livekitauth.TokenRequest{RoomID: roomID, Identity: "user-" + strconv.FormatInt(user.ID, 10), Name: user.Name, Role: user.Role, CanPublish: canPublish})
+}
+
+func (h *HTTP) guestLiveKitToken(w http.ResponseWriter, r *http.Request) {
+	roomID, roomErr := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	memberID, memberErr := strconv.ParseInt(r.PathValue("memberId"), 10, 64)
+	if roomErr != nil || memberErr != nil || roomID < 1 || memberID < 1 {
+		fail(w, usecase.ErrInvalid)
+		return
+	}
+	members, err := h.u.Store().ListMembers(roomID)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	for _, member := range members {
+		if member.ID == memberID {
+			h.writeLiveKitToken(w, livekitauth.TokenRequest{RoomID: roomID, Identity: "member-" + strconv.FormatInt(member.ID, 10), Name: member.Name, Role: member.Role})
+			return
+		}
+	}
+	write(w, http.StatusNotFound, map[string]string{"error": "member tidak ditemukan pada room"})
+}
+
+func (h *HTTP) writeLiveKitToken(w http.ResponseWriter, req livekitauth.TokenRequest) {
+	url, token, err := h.livekit.Connection(req)
+	if err != nil {
+		if errors.Is(err, livekitauth.ErrNotConfigured) {
+			write(w, http.StatusServiceUnavailable, map[string]string{"error": err.Error()})
+			return
+		}
+		fail(w, err)
+		return
+	}
+	write(w, http.StatusOK, map[string]any{"data": map[string]string{"url": url, "token": token}})
 }
 func (h *HTTP) listDirectors(w http.ResponseWriter, r *http.Request) {
 	roomID, e := strconv.ParseInt(r.PathValue("id"), 10, 64)

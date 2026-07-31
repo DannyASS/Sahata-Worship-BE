@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sahata-worship-be/internal/handler"
+	livekitauth "sahata-worship-be/internal/livekit"
 	"sahata-worship-be/internal/repository"
 	"sahata-worship-be/internal/usecase"
 	"time"
@@ -52,7 +53,7 @@ func main() {
 	if e = db.Ping(); e != nil {
 		log.Fatalf("database: %v", e)
 	}
-	h := handler.New(usecase.New(repository.NewMySQL(db), env("JWT_SECRET", "dev-secret-change-me")), env("CORS_ORIGIN", "http://localhost:5173"))
+	h := handler.New(usecase.New(repository.NewMySQL(db), env("JWT_SECRET", "dev-secret-change-me")), env("CORS_ORIGIN", "http://localhost:5173"), livekitauth.Config{WebSocketURL: env("LIVEKIT_WS_URL", env("LIVEKIT_URL", "")), APIKey: env("LIVEKIT_API_KEY", ""), APISecret: env("LIVEKIT_API_SECRET", "")})
 	// WriteTimeout must remain disabled for long-lived SSE signaling streams.
 	srv := &http.Server{Addr: ":" + env("APP_PORT", "8080"), Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 0, IdleTimeout: 60 * time.Second}
 	log.Printf("Sahata API listening on %s", srv.Addr)
