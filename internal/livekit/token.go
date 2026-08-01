@@ -12,6 +12,8 @@ import (
 
 var ErrNotConfigured = errors.New("livekit belum dikonfigurasi")
 
+const tokenTTL = 90 * time.Minute
+
 type Config struct {
 	WebSocketURL string
 	APIKey       string
@@ -64,7 +66,7 @@ func (i *Issuer) Connection(req TokenRequest) (string, string, error) {
 		return "", "", err
 	}
 	raw, err := jwt.NewWithClaims(jwt.SigningMethodHS256, claims{
-		RegisteredClaims: jwt.RegisteredClaims{Issuer: i.config.APIKey, Subject: req.Identity, NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)), ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)), IssuedAt: jwt.NewNumericDate(now)},
+		RegisteredClaims: jwt.RegisteredClaims{Issuer: i.config.APIKey, Subject: req.Identity, NotBefore: jwt.NewNumericDate(now.Add(-5 * time.Second)), ExpiresAt: jwt.NewNumericDate(now.Add(tokenTTL)), IssuedAt: jwt.NewNumericDate(now)},
 		Name:             req.Name, Metadata: string(metadata), Video: grant,
 	}).SignedString([]byte(i.config.APISecret))
 	if err != nil {

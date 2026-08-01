@@ -3,6 +3,7 @@ package livekit
 import (
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 )
@@ -42,6 +43,9 @@ func TestIssuePublisherToken(t *testing.T) {
 	}
 	if parsed.Issuer != "test-key" || parsed.Subject != "user-7" {
 		t.Fatalf("unexpected identity claims: issuer=%q subject=%q", parsed.Issuer, parsed.Subject)
+	}
+	if got := parsed.ExpiresAt.Time.Sub(parsed.IssuedAt.Time); got != 90*time.Minute {
+		t.Fatalf("token TTL = %v, want %v", got, 90*time.Minute)
 	}
 	if !parsed.Video.RoomJoin || parsed.Video.Room != "church-worship-42" || !parsed.Video.CanPublish || !parsed.Video.CanSubscribe {
 		t.Fatalf("unexpected publisher grant: %+v", parsed.Video)
