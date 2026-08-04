@@ -1,0 +1,2 @@
+ALTER TABLE songs
+  ADD COLUMN chord_sheet MEDIUMTEXT NULL AFTER bpm;

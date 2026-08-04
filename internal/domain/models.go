@@ -66,6 +66,7 @@ type Song struct {
 	DefaultKey  string        `json:"defaultKey"`
 	SelectedKey string        `json:"selectedKey,omitempty"`
 	BPM         int           `json:"bpm"`
+	ChordSheet  string        `json:"chordSheet"`
 	CreatedBy   int64         `json:"createdBy,omitempty"`
 	Sections    []SongSection `json:"sections"`
 }

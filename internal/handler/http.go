@@ -258,6 +258,21 @@ func (h *HTTP) broadcastActivity(activity domain.Activity) {
 	h.broadcast(activity.RoomID, streamEvent{Name: "cue", Data: activity})
 }
 
+func (h *HTTP) broadcastSongUpdate(songID int64) {
+	rooms, err := h.u.Store().ListRooms()
+	if err != nil {
+		return
+	}
+	for _, room := range rooms {
+		for _, song := range room.Songs {
+			if song.ID == songID {
+				h.broadcast(room.ID, streamEvent{Name: "room-state", Data: room})
+				break
+			}
+		}
+	}
+}
+
 func (h *HTTP) broadcast(roomID int64, event streamEvent) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -563,6 +578,7 @@ func (h *HTTP) api(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			x.CreatedBy = userID(r)
+			x.ChordSheet = strings.TrimSpace(x.ChordSheet)
 			if strings.TrimSpace(x.Title) == "" || strings.TrimSpace(x.Artist) == "" || strings.TrimSpace(x.DefaultKey) == "" || x.BPM < 1 || len(x.Sections) < 1 {
 				fail(w, usecase.ErrInvalid)
 				return
@@ -575,11 +591,15 @@ func (h *HTTP) api(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			x.ID = id
+			x.ChordSheet = strings.TrimSpace(x.ChordSheet)
 			if strings.TrimSpace(x.Title) == "" || strings.TrimSpace(x.Artist) == "" || strings.TrimSpace(x.DefaultKey) == "" || x.BPM < 1 || len(x.Sections) < 1 {
 				fail(w, usecase.ErrInvalid)
 				return
 			}
 			v, e = s.UpdateSong(x)
+			if e == nil {
+				h.broadcastSongUpdate(id)
+			}
 		case "DELETE":
 			e = s.DeleteSong(id)
 			v = map[string]string{"message": "song deleted"}

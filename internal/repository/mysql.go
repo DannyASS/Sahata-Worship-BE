@@ -172,7 +172,7 @@ func saveRoomSongs(tx *sql.Tx, roomID int64, songs []domain.Song) error {
 	return nil
 }
 func (r *MySQL) roomSongs(roomID int64) ([]domain.Song, error) {
-	rows, e := r.db.Query(`SELECT s.id,s.title,s.artist,s.default_key,rs.selected_key,s.bpm,s.created_by FROM room_songs rs JOIN songs s ON s.id=rs.song_id WHERE rs.room_id=? ORDER BY rs.display_order,s.title`, roomID)
+	rows, e := r.db.Query(`SELECT s.id,s.title,s.artist,s.default_key,rs.selected_key,s.bpm,COALESCE(s.chord_sheet,''),s.created_by FROM room_songs rs JOIN songs s ON s.id=rs.song_id WHERE rs.room_id=? ORDER BY rs.display_order,s.title`, roomID)
 	if e != nil {
 		return nil, e
 	}
@@ -180,7 +180,7 @@ func (r *MySQL) roomSongs(roomID int64) ([]domain.Song, error) {
 	out := make([]domain.Song, 0)
 	for rows.Next() {
 		var x domain.Song
-		if e = rows.Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.SelectedKey, &x.BPM, &x.CreatedBy); e != nil {
+		if e = rows.Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.SelectedKey, &x.BPM, &x.ChordSheet, &x.CreatedBy); e != nil {
 			return nil, e
 		}
 		x.Sections, e = r.songSections(x.ID)
@@ -290,7 +290,7 @@ func (r *MySQL) DeleteCue(id int64) error {
 	return affected(res, e)
 }
 func (r *MySQL) ListSongs(search string) ([]domain.Song, error) {
-	q := `SELECT id,title,artist,default_key,bpm,created_by FROM songs`
+	q := `SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs`
 	args := []any{}
 	if strings.TrimSpace(search) != "" {
 		q += ` WHERE title LIKE ? OR artist LIKE ?`
@@ -306,7 +306,7 @@ func (r *MySQL) ListSongs(search string) ([]domain.Song, error) {
 	out := make([]domain.Song, 0)
 	for rows.Next() {
 		var x domain.Song
-		if e = rows.Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.BPM, &x.CreatedBy); e != nil {
+		if e = rows.Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.BPM, &x.ChordSheet, &x.CreatedBy); e != nil {
 			return nil, e
 		}
 		x.Sections, e = r.songSections(x.ID)
@@ -318,7 +318,7 @@ func (r *MySQL) ListSongs(search string) ([]domain.Song, error) {
 	return out, rows.Err()
 }
 func (r *MySQL) SongByID(id int64) (x domain.Song, e error) {
-	e = r.db.QueryRow(`SELECT id,title,artist,default_key,bpm,created_by FROM songs WHERE id=?`, id).Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.BPM, &x.CreatedBy)
+	e = r.db.QueryRow(`SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs WHERE id=?`, id).Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.BPM, &x.ChordSheet, &x.CreatedBy)
 	if e != nil {
 		return
 	}
@@ -350,12 +350,12 @@ func (r *MySQL) saveSong(x domain.Song, update bool) (domain.Song, error) {
 	}
 	defer tx.Rollback()
 	if update {
-		_, err := tx.Exec(`UPDATE songs SET title=?,artist=?,default_key=?,bpm=? WHERE id=?`, x.Title, x.Artist, x.DefaultKey, x.BPM, x.ID)
+		_, err := tx.Exec(`UPDATE songs SET title=?,artist=?,default_key=?,bpm=?,chord_sheet=NULLIF(?, '') WHERE id=?`, x.Title, x.Artist, x.DefaultKey, x.BPM, strings.TrimSpace(x.ChordSheet), x.ID)
 		if err != nil {
 			return x, err
 		}
 	} else {
-		res, err := tx.Exec(`INSERT INTO songs(title,artist,default_key,bpm,created_by) VALUES(?,?,?,?,?)`, x.Title, x.Artist, x.DefaultKey, x.BPM, x.CreatedBy)
+		res, err := tx.Exec(`INSERT INTO songs(title,artist,default_key,bpm,chord_sheet,created_by) VALUES(?,?,?,?,NULLIF(?, ''),?)`, x.Title, x.Artist, x.DefaultKey, x.BPM, strings.TrimSpace(x.ChordSheet), x.CreatedBy)
 		if err != nil {
 			return x, err
 		}
