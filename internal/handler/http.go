@@ -266,6 +266,7 @@ func (h *HTTP) broadcastSongUpdate(songID int64) {
 	for _, room := range rooms {
 		for _, song := range room.Songs {
 			if song.ID == songID {
+				h.broadcast(room.ID, streamEvent{Name: "song-updated", Data: song})
 				h.broadcast(room.ID, streamEvent{Name: "room-state", Data: room})
 				break
 			}
