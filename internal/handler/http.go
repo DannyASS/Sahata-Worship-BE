@@ -543,7 +543,11 @@ func (h *HTTP) api(w http.ResponseWriter, r *http.Request) {
 	case "cues":
 		switch r.Method {
 		case "GET":
-			v, e = s.ListCues()
+			if hasPagination(r) {
+				v, e = s.ListCuesPage(paginationRequest(r))
+			} else {
+				v, e = s.ListCues()
+			}
 		case "POST":
 			var x domain.Cue
 			if decode(w, r, &x) != nil {
@@ -570,6 +574,8 @@ func (h *HTTP) api(w http.ResponseWriter, r *http.Request) {
 		case "GET":
 			if id > 0 {
 				v, e = s.SongByID(id)
+			} else if hasPagination(r) {
+				v, e = s.ListSongsPage(paginationRequest(r))
 			} else {
 				v, e = s.ListSongs(r.URL.Query().Get("search"))
 			}
@@ -744,6 +750,25 @@ func (h *HTTP) cors(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+func hasPagination(r *http.Request) bool {
+	query := r.URL.Query()
+	return query.Has("page") || query.Has("pageSize")
+}
+func paginationRequest(r *http.Request) domain.PageRequest {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	pageSize, _ := strconv.Atoi(r.URL.Query().Get("pageSize"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 5 {
+		pageSize = 5
+	}
+	return domain.PageRequest{
+		Page:     page,
+		PageSize: pageSize,
+		Search:   strings.TrimSpace(r.URL.Query().Get("search")),
+	}
 }
 func userID(r *http.Request) int64 {
 	x, _ := strconv.ParseInt(r.Header.Get("X-User-ID"), 10, 64)

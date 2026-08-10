@@ -94,6 +94,18 @@ type Settings struct {
 	MicSensitivity int    `json:"micSensitivity"`
 	CueVolume      int    `json:"cueVolume"`
 }
+type PageRequest struct {
+	Page     int
+	PageSize int
+	Search   string
+}
+type Page[T any] struct {
+	Items      []T `json:"items"`
+	Total      int `json:"total"`
+	Page       int `json:"page"`
+	PageSize   int `json:"pageSize"`
+	TotalPages int `json:"totalPages"`
+}
 
 type Store interface {
 	CreateUser(User) (User, error)
@@ -114,10 +126,12 @@ type Store interface {
 	UpsertUserMember(Member) (Member, error)
 	DeleteUserMember(int64, int64) (Member, error)
 	ListCues() ([]Cue, error)
+	ListCuesPage(PageRequest) (Page[Cue], error)
 	CreateCue(Cue) (Cue, error)
 	UpdateCue(Cue) (Cue, error)
 	DeleteCue(int64) error
 	ListSongs(string) ([]Song, error)
+	ListSongsPage(PageRequest) (Page[Song], error)
 	SongByID(int64) (Song, error)
 	CreateSong(Song) (Song, error)
 	UpdateSong(Song) (Song, error)

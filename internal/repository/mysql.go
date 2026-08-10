@@ -274,6 +274,29 @@ func (r *MySQL) ListCues() ([]domain.Cue, error) {
 	}
 	return out, rows.Err()
 }
+func (r *MySQL) ListCuesPage(req domain.PageRequest) (domain.Page[domain.Cue], error) {
+	var total int
+	if e := r.db.QueryRow(`SELECT COUNT(*) FROM cues`).Scan(&total); e != nil {
+		return domain.Page[domain.Cue]{}, e
+	}
+	rows, e := r.db.Query(`SELECT id,label,category,priority,channel,icon,vibration,is_active,sort_order FROM cues ORDER BY sort_order,id LIMIT ? OFFSET ?`, req.PageSize, (req.Page-1)*req.PageSize)
+	if e != nil {
+		return domain.Page[domain.Cue]{}, e
+	}
+	defer rows.Close()
+	items := make([]domain.Cue, 0, req.PageSize)
+	for rows.Next() {
+		var x domain.Cue
+		if e = rows.Scan(&x.ID, &x.Label, &x.Category, &x.Priority, &x.Channel, &x.Icon, &x.Vibration, &x.Active, &x.SortOrder); e != nil {
+			return domain.Page[domain.Cue]{}, e
+		}
+		items = append(items, x)
+	}
+	if e = rows.Err(); e != nil {
+		return domain.Page[domain.Cue]{}, e
+	}
+	return page(items, total, req), nil
+}
 func (r *MySQL) CreateCue(x domain.Cue) (domain.Cue, error) {
 	res, e := r.db.Exec(`INSERT INTO cues(label,category,priority,channel,icon,vibration,is_active,sort_order) VALUES(?,?,?,?,?,?,?,?)`, x.Label, x.Category, x.Priority, x.Channel, x.Icon, x.Vibration, x.Active, x.SortOrder)
 	if e == nil {
@@ -290,13 +313,8 @@ func (r *MySQL) DeleteCue(id int64) error {
 	return affected(res, e)
 }
 func (r *MySQL) ListSongs(search string) ([]domain.Song, error) {
-	q := `SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs`
-	args := []any{}
-	if strings.TrimSpace(search) != "" {
-		q += ` WHERE title LIKE ? OR artist LIKE ?`
-		term := "%" + strings.TrimSpace(search) + "%"
-		args = append(args, term, term)
-	}
+	where, args := songFilter(search)
+	q := `SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs` + where
 	q += ` ORDER BY title,artist`
 	rows, e := r.db.Query(q, args...)
 	if e != nil {
@@ -316,6 +334,49 @@ func (r *MySQL) ListSongs(search string) ([]domain.Song, error) {
 		out = append(out, x)
 	}
 	return out, rows.Err()
+}
+func (r *MySQL) ListSongsPage(req domain.PageRequest) (domain.Page[domain.Song], error) {
+	where, args := songFilter(req.Search)
+	var total int
+	if e := r.db.QueryRow(`SELECT COUNT(*) FROM songs`+where, args...).Scan(&total); e != nil {
+		return domain.Page[domain.Song]{}, e
+	}
+	queryArgs := append(append([]any{}, args...), req.PageSize, (req.Page-1)*req.PageSize)
+	rows, e := r.db.Query(`SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs`+where+` ORDER BY title,artist LIMIT ? OFFSET ?`, queryArgs...)
+	if e != nil {
+		return domain.Page[domain.Song]{}, e
+	}
+	defer rows.Close()
+	items := make([]domain.Song, 0, req.PageSize)
+	for rows.Next() {
+		var x domain.Song
+		if e = rows.Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.BPM, &x.ChordSheet, &x.CreatedBy); e != nil {
+			return domain.Page[domain.Song]{}, e
+		}
+		x.Sections, e = r.songSections(x.ID)
+		if e != nil {
+			return domain.Page[domain.Song]{}, e
+		}
+		items = append(items, x)
+	}
+	if e = rows.Err(); e != nil {
+		return domain.Page[domain.Song]{}, e
+	}
+	return page(items, total, req), nil
+}
+func songFilter(search string) (string, []any) {
+	if strings.TrimSpace(search) == "" {
+		return "", nil
+	}
+	term := "%" + strings.TrimSpace(search) + "%"
+	return ` WHERE title LIKE ? OR artist LIKE ?`, []any{term, term}
+}
+func page[T any](items []T, total int, req domain.PageRequest) domain.Page[T] {
+	totalPages := 0
+	if total > 0 {
+		totalPages = (total + req.PageSize - 1) / req.PageSize
+	}
+	return domain.Page[T]{Items: items, Total: total, Page: req.Page, PageSize: req.PageSize, TotalPages: totalPages}
 }
 func (r *MySQL) SongByID(id int64) (x domain.Song, e error) {
 	e = r.db.QueryRow(`SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs WHERE id=?`, id).Scan(&x.ID, &x.Title, &x.Artist, &x.DefaultKey, &x.BPM, &x.ChordSheet, &x.CreatedBy)
