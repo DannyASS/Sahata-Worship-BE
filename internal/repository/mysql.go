@@ -315,7 +315,7 @@ func (r *MySQL) DeleteCue(id int64) error {
 func (r *MySQL) ListSongs(search string) ([]domain.Song, error) {
 	where, args := songFilter(search)
 	q := `SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs` + where
-	q += ` ORDER BY title,artist`
+	q += ` ORDER BY title,artist,id`
 	rows, e := r.db.Query(q, args...)
 	if e != nil {
 		return nil, e
@@ -336,13 +336,13 @@ func (r *MySQL) ListSongs(search string) ([]domain.Song, error) {
 	return out, rows.Err()
 }
 func (r *MySQL) ListSongsPage(req domain.PageRequest) (domain.Page[domain.Song], error) {
-	where, args := songFilter(req.Search)
+	where, args := songPageFilter(req)
 	var total int
 	if e := r.db.QueryRow(`SELECT COUNT(*) FROM songs`+where, args...).Scan(&total); e != nil {
 		return domain.Page[domain.Song]{}, e
 	}
 	queryArgs := append(append([]any{}, args...), req.PageSize, (req.Page-1)*req.PageSize)
-	rows, e := r.db.Query(`SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs`+where+` ORDER BY title,artist LIMIT ? OFFSET ?`, queryArgs...)
+	rows, e := r.db.Query(`SELECT id,title,artist,default_key,bpm,COALESCE(chord_sheet,''),created_by FROM songs`+where+` ORDER BY title,artist,id LIMIT ? OFFSET ?`, queryArgs...)
 	if e != nil {
 		return domain.Page[domain.Song]{}, e
 	}
@@ -370,6 +370,27 @@ func songFilter(search string) (string, []any) {
 	}
 	term := "%" + strings.TrimSpace(search) + "%"
 	return ` WHERE title LIKE ? OR artist LIKE ?`, []any{term, term}
+}
+func songPageFilter(req domain.PageRequest) (string, []any) {
+	conditions := make([]string, 0, 2)
+	args := make([]any, 0, 2+len(req.ExcludeIDs))
+	if search := strings.TrimSpace(req.Search); search != "" {
+		term := "%" + search + "%"
+		conditions = append(conditions, `(title LIKE ? OR artist LIKE ?)`)
+		args = append(args, term, term)
+	}
+	if len(req.ExcludeIDs) > 0 {
+		placeholders := make([]string, len(req.ExcludeIDs))
+		for index, id := range req.ExcludeIDs {
+			placeholders[index] = "?"
+			args = append(args, id)
+		}
+		conditions = append(conditions, `id NOT IN (`+strings.Join(placeholders, ",")+`)`)
+	}
+	if len(conditions) == 0 {
+		return "", nil
+	}
+	return ` WHERE ` + strings.Join(conditions, ` AND `), args
 }
 func page[T any](items []T, total int, req domain.PageRequest) domain.Page[T] {
 	totalPages := 0

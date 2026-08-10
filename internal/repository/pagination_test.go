@@ -21,3 +21,15 @@ func TestSongFilter(t *testing.T) {
 		t.Fatalf("songFilter() = %q, %#v; want LIKE filter and %#v", where, args, wantArgs)
 	}
 }
+
+func TestSongPageFilter(t *testing.T) {
+	where, args := songPageFilter(domain.PageRequest{
+		Search:     "  Kasih  ",
+		ExcludeIDs: []int64{3, 8},
+	})
+	wantWhere := ` WHERE (title LIKE ? OR artist LIKE ?) AND id NOT IN (?,?)`
+	wantArgs := []any{"%Kasih%", "%Kasih%", int64(3), int64(8)}
+	if where != wantWhere || !reflect.DeepEqual(args, wantArgs) {
+		t.Fatalf("songPageFilter() = %q, %#v; want %q and %#v", where, args, wantWhere, wantArgs)
+	}
+}

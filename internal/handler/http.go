@@ -765,10 +765,31 @@ func paginationRequest(r *http.Request) domain.PageRequest {
 		pageSize = 5
 	}
 	return domain.PageRequest{
-		Page:     page,
-		PageSize: pageSize,
-		Search:   strings.TrimSpace(r.URL.Query().Get("search")),
+		Page:       page,
+		PageSize:   pageSize,
+		Search:     strings.TrimSpace(r.URL.Query().Get("search")),
+		ExcludeIDs: excludeIDs(r.URL.Query().Get("excludeIds")),
 	}
+}
+func excludeIDs(value string) []int64 {
+	const maxExcludeIDs = 200
+	var ids []int64
+	seen := make(map[int64]struct{})
+	for _, raw := range strings.Split(value, ",") {
+		id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+		if err != nil || id < 1 {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+		if len(ids) == maxExcludeIDs {
+			break
+		}
+	}
+	return ids
 }
 func userID(r *http.Request) int64 {
 	x, _ := strconv.ParseInt(r.Header.Get("X-User-ID"), 10, 64)

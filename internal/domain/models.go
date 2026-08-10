@@ -95,9 +95,10 @@ type Settings struct {
 	CueVolume      int    `json:"cueVolume"`
 }
 type PageRequest struct {
-	Page     int
-	PageSize int
-	Search   string
+	Page       int
+	PageSize   int
+	Search     string
+	ExcludeIDs []int64
 }
 type Page[T any] struct {
 	Items      []T `json:"items"`
